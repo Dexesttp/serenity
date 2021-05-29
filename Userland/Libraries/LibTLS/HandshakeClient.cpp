@@ -225,6 +225,12 @@ void TLSv12::build_rsa_pre_master_secret(PacketBuilder& builder)
     builder.append(outbuf);
 }
 
+void TLSv12::build_dhe_dss_pre_master_secret(PacketBuilder& builder)
+{
+    dbgln("Building DHE_DSS pre-master secret... (skipping)");
+    (void)builder;
+}
+
 ByteBuffer TLSv12::build_certificate()
 {
     PacketBuilder builder { MessageType::Handshake, m_context.options.version };
@@ -288,13 +294,7 @@ ByteBuffer TLSv12::build_client_key_exchange()
         build_rsa_pre_master_secret(builder);
         break;
     case KeyExchangeAlgorithm::DHE_DSS:
-        dbgln("Client key exchange for DHE_DSS is not implemented");
-        TODO();
-        break;
-    case KeyExchangeAlgorithm::DH_DSS:
-    case KeyExchangeAlgorithm::DH_RSA:
-        dbgln("Client key exchange for DH algorithms is not implemented");
-        TODO();
+        build_dhe_dss_pre_master_secret(builder);
         break;
     case KeyExchangeAlgorithm::DHE_RSA:
         dbgln("Client key exchange for DHE_RSA is not implemented");
@@ -302,6 +302,14 @@ ByteBuffer TLSv12::build_client_key_exchange()
         break;
     case KeyExchangeAlgorithm::DH_anon:
         dbgln("Client key exchange for DH_anon is not implemented");
+        TODO();
+        break;
+    case KeyExchangeAlgorithm::DH_DSS:
+        dbgln("Client key exchange for DH algorithms is not implemented");
+        TODO();
+        break;
+    case KeyExchangeAlgorithm::DH_RSA:
+        dbgln("Client key exchange for DH algorithms is not implemented");
         TODO();
         break;
     case KeyExchangeAlgorithm::ECDHE_RSA:

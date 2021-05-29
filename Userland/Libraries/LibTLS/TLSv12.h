@@ -8,6 +8,7 @@
 
 #include "Certificate.h"
 #include <AK/IPv4Address.h>
+#include <AK/Variant.h>
 #include <AK/WeakPtr.h>
 #include <LibCore/Notifier.h>
 #include <LibCore/Socket.h>
@@ -18,6 +19,7 @@
 #include <LibCrypto/Hash/HashManager.h>
 #include <LibCrypto/PK/RSA.h>
 #include <LibTLS/CipherSuite.h>
+#include <LibTLS/HandshakeServerParams.h>
 #include <LibTLS/TLSPacketBuilder.h>
 
 namespace TLS {
@@ -167,13 +169,15 @@ enum ClientVerificationStaus {
 // 4 bytes of fixed IV, 8 random (nonce) bytes, 4 bytes for counter
 // GCM specifically asks us to transmit only the nonce, the counter is zero
 // and the fixed IV is derived from the premaster key.
-#define ENUMERATE_CIPHERS(C)                                                                                                                    \
-    C(true, CipherSuite::RSA_WITH_AES_128_CBC_SHA, KeyExchangeAlgorithm::RSA, CipherAlgorithm::AES_128_CBC, Crypto::Hash::SHA1, 16, false)      \
-    C(true, CipherSuite::RSA_WITH_AES_256_CBC_SHA, KeyExchangeAlgorithm::RSA, CipherAlgorithm::AES_256_CBC, Crypto::Hash::SHA1, 16, false)      \
-    C(true, CipherSuite::RSA_WITH_AES_128_CBC_SHA256, KeyExchangeAlgorithm::RSA, CipherAlgorithm::AES_128_CBC, Crypto::Hash::SHA256, 16, false) \
-    C(true, CipherSuite::RSA_WITH_AES_256_CBC_SHA256, KeyExchangeAlgorithm::RSA, CipherAlgorithm::AES_256_CBC, Crypto::Hash::SHA256, 16, false) \
-    C(true, CipherSuite::RSA_WITH_AES_128_GCM_SHA256, KeyExchangeAlgorithm::RSA, CipherAlgorithm::AES_128_GCM, Crypto::Hash::SHA256, 8, true)   \
-    C(true, CipherSuite::RSA_WITH_AES_256_GCM_SHA384, KeyExchangeAlgorithm::RSA, CipherAlgorithm::AES_256_GCM, Crypto::Hash::SHA384, 8, true)
+#define ENUMERATE_CIPHERS(C)                                                                                                                                  \
+    C(true, CipherSuite::RSA_WITH_AES_128_CBC_SHA, KeyExchangeAlgorithm::RSA, CipherAlgorithm::AES_128_CBC, Crypto::Hash::SHA1, 16, false)                    \
+    C(true, CipherSuite::RSA_WITH_AES_256_CBC_SHA, KeyExchangeAlgorithm::RSA, CipherAlgorithm::AES_256_CBC, Crypto::Hash::SHA1, 16, false)                    \
+    C(true, CipherSuite::RSA_WITH_AES_128_CBC_SHA256, KeyExchangeAlgorithm::RSA, CipherAlgorithm::AES_128_CBC, Crypto::Hash::SHA256, 16, false)               \
+    C(true, CipherSuite::RSA_WITH_AES_256_CBC_SHA256, KeyExchangeAlgorithm::RSA, CipherAlgorithm::AES_256_CBC, Crypto::Hash::SHA256, 16, false)               \
+    C(true, CipherSuite::RSA_WITH_AES_128_GCM_SHA256, KeyExchangeAlgorithm::RSA, CipherAlgorithm::AES_128_GCM, Crypto::Hash::SHA256, 8, true)                 \
+    C(true, CipherSuite::RSA_WITH_AES_256_GCM_SHA384, KeyExchangeAlgorithm::RSA, CipherAlgorithm::AES_256_GCM, Crypto::Hash::SHA384, 8, true)                 \
+    C(true, CipherSuite::ECDHE_ECDSA_WITH_AES_128_GCM_SHA256, KeyExchangeAlgorithm::ECDHE_ECDSA, CipherAlgorithm::AES_128_GCM, Crypto::Hash::SHA256, 8, true) \
+    C(true, CipherSuite::ECDHE_ECDSA_WITH_AES_256_GCM_SHA384, KeyExchangeAlgorithm::ECDHE_ECDSA, CipherAlgorithm::AES_256_GCM, Crypto::Hash::SHA384, 8, true)
 
 constexpr KeyExchangeAlgorithm get_key_exchange_algorithm(CipherSuite suite)
 {
@@ -220,6 +224,8 @@ struct Options {
 
     OPTION_WITH_DEFAULTS(Version, version, Version::V12)
     OPTION_WITH_DEFAULTS(Vector<SignatureAndHashAlgorithm>, supported_signature_algorithms,
+        { HashAlgorithm::SHA384, SignatureAlgorithm::DSA },
+        { HashAlgorithm::SHA256, SignatureAlgorithm::DSA },
         { HashAlgorithm::SHA512, SignatureAlgorithm::RSA },
         { HashAlgorithm::SHA384, SignatureAlgorithm::RSA },
         { HashAlgorithm::SHA256, SignatureAlgorithm::RSA },
@@ -253,6 +259,12 @@ struct Context {
     ByteBuffer master_key;
     ByteBuffer premaster_key;
     u8 cipher_spec_set { 0 };
+    using ServerParamVariant = Variant<
+        Empty,
+        ServerDHEParams,
+        ServerDHAnonParams,
+        ServerECDHParams>;
+    ServerParamVariant server_params;
     struct {
         int created { 0 };
         u8 remote_mac[32];
@@ -400,6 +412,7 @@ private:
     ByteBuffer build_change_cipher_spec();
     ByteBuffer build_verify_request();
     void build_rsa_pre_master_secret(PacketBuilder&);
+    void build_dhe_dss_pre_master_secret(PacketBuilder&);
 
     bool flush();
     void write_into_socket();

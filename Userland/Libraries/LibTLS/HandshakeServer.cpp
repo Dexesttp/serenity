@@ -79,7 +79,7 @@ ssize_t TLSv12::handle_server_hello(ReadonlyBytes buffer, WritePacketStage& writ
         return (i8)Error::NoCommonCipher;
     }
     m_context.cipher = cipher;
-    dbgln_if(TLS_DEBUG, "Cipher: {}", (u16)cipher);
+    dbgln("Cipher: {}", (u16)cipher);
 
     // Simplification: We only support handshake hash functions via HMAC
     m_context.handshake_hash.initialize(hmac_hash());
@@ -199,9 +199,86 @@ ByteBuffer TLSv12::build_server_key_exchange()
     return {};
 }
 
-ssize_t TLSv12::handle_server_key_exchange(ReadonlyBytes)
+static ssize_t read_dhe_params(ReadonlyBytes const& buffer, ServerDHEParams &params) {
+    size_t current_pos = 0;
+    dbgln("Server key exchange for DHE : getting 64 bytes for client/server random");
+    if (buffer.size() <= 64)
+        return (i8)Error::NeedMoreData;
+    current_pos += 64;
+    params.client_random = ByteBuffer::copy(buffer.slice(0, 32));
+    params.server_random = ByteBuffer::copy(buffer.slice(32, 32));
+    dbgln("Server key exchange for DHE : getting DH parameters");
+    auto read_next_u16 = [&]() -> u16 {
+        return (buffer[current_pos] << 8 | buffer[current_pos + 1]);
+    };
+    auto read_next_bytes = [&](size_t byte_count) {
+        auto outbuffer = ByteBuffer::copy(buffer.slice(current_pos, byte_count));
+        current_pos += byte_count;
+        return outbuffer;
+    };
+    if (buffer.size() <= current_pos + 2)
+        return (i8)Error::NeedMoreData;
+    auto dh_p_size = read_next_u16();
+    if (buffer.size() <= current_pos + dh_p_size)
+        return (i8)Error::NeedMoreData;
+    params.dh_p = read_next_bytes(dh_p_size);
+    dbgln("Server key exchange for DHE : got {} bytes for P parameter", dh_p_size);
+    if (buffer.size() <= current_pos + 2)
+        return (i8)Error::NeedMoreData;
+    auto dh_g_size = read_next_u16();
+    if (buffer.size() <= current_pos + dh_g_size)
+        return (i8)Error::NeedMoreData;
+    params.dh_g = read_next_bytes(dh_g_size);
+    dbgln("Server key exchange for DHE : got {} bytes for G parameter", dh_g_size);
+    if (buffer.size() <= current_pos + 2)
+        return (i8)Error::NeedMoreData;
+    auto dh_Ys_size = read_next_u16();
+    if (buffer.size() <= current_pos + dh_Ys_size)
+        return (i8)Error::NeedMoreData;
+    params.dh_Ys = read_next_bytes(dh_Ys_size);
+    dbgln("Server key exchange for DHE : got {} bytes for Ys parameter", dh_Ys_size);
+    return 0;
+}
+
+static ssize_t read_dhanon_params(ReadonlyBytes const& buffer, ServerDHEParams &params) {
+    size_t current_pos = 0;
+    dbgln("Server key exchange for DH_Anon : getting DH parameters");
+    auto read_next_u16 = [&]() -> u16 {
+        return (buffer[current_pos] << 8 | buffer[current_pos + 1]);
+    };
+    auto read_next_bytes = [&](size_t byte_count) {
+        auto outbuffer = ByteBuffer::copy(buffer.slice(current_pos, byte_count));
+        current_pos += byte_count;
+        return outbuffer;
+    };
+    if (buffer.size() <= current_pos + 2)
+        return (i8)Error::NeedMoreData;
+    auto dh_p_size = read_next_u16();
+    if (buffer.size() <= current_pos + dh_p_size)
+        return (i8)Error::NeedMoreData;
+    params.dh_p = read_next_bytes(dh_p_size);
+    dbgln("Server key exchange for DH_Anon : got {} bytes for P parameter", dh_p_size);
+    if (buffer.size() <= current_pos + 2)
+        return (i8)Error::NeedMoreData;
+    auto dh_g_size = read_next_u16();
+    if (buffer.size() <= current_pos + dh_g_size)
+        return (i8)Error::NeedMoreData;
+    params.dh_g = read_next_bytes(dh_g_size);
+    dbgln("Server key exchange for DH_Anon : got {} bytes for G parameter", dh_g_size);
+    if (buffer.size() <= current_pos + 2)
+        return (i8)Error::NeedMoreData;
+    auto dh_Ys_size = read_next_u16();
+    if (buffer.size() <= current_pos + dh_Ys_size)
+        return (i8)Error::NeedMoreData;
+    params.dh_Ys = read_next_bytes(dh_Ys_size);
+    dbgln("Server key exchange for DH_Anon : got {} bytes for Ys parameter", dh_Ys_size);
+    return 0;
+}
+
+ssize_t TLSv12::handle_server_key_exchange(ReadonlyBytes buffer)
 {
-    switch (get_key_exchange_algorithm(m_context.cipher)) {
+    auto key_exchange = get_key_exchange_algorithm(m_context.cipher);
+    switch (key_exchange) {
     case KeyExchangeAlgorithm::RSA:
     case KeyExchangeAlgorithm::DH_DSS:
     case KeyExchangeAlgorithm::DH_RSA:
@@ -210,17 +287,12 @@ ssize_t TLSv12::handle_server_key_exchange(ReadonlyBytes)
         dbgln("Server key exchange received for RSA, DH_DSS or DH_RSA is not legal");
         return (i8)Error::UnexpectedMessage;
     case KeyExchangeAlgorithm::DHE_DSS:
-        dbgln("Server key exchange for DHE_DSS is not implemented");
-        TODO();
-        break;
     case KeyExchangeAlgorithm::DHE_RSA:
-        dbgln("Server key exchange for DHE_RSA is not implemented");
-        TODO();
-        break;
+        m_context.server_params.set(ServerDHEParams {});
+        return read_dhe_params(buffer, m_context.server_params.get<ServerDHEParams>());
     case KeyExchangeAlgorithm::DH_anon:
-        dbgln("Server key exchange for DH_anon is not implemented");
-        TODO();
-        break;
+        m_context.server_params.set(ServerDHAnonParams {});
+        return read_dhanon_params(buffer, m_context.server_params.get<ServerDHEParams>());
     case KeyExchangeAlgorithm::ECDHE_RSA:
     case KeyExchangeAlgorithm::ECDH_ECDSA:
     case KeyExchangeAlgorithm::ECDH_RSA:
